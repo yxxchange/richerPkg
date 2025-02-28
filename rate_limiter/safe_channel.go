@@ -1,4 +1,4 @@
-package batch_scheduler
+package rate_limiter
 
 import "sync"
 

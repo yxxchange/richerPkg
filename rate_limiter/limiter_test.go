@@ -1,4 +1,4 @@
-package batch_scheduler
+package rate_limiter
 
 import (
 	"context"
@@ -19,7 +19,7 @@ func (tp *TestCaseProcessor[T, V]) Process(_ T) (V, error) {
 }
 
 func TestBatchScheduler_Scheduler(t *testing.T) {
-	batchScheduler := NewBatchScheduler[int, int](DefaultOptions)
+	batchScheduler := NewRateLimiter[int, int](DefaultOptions)
 	taskCtx := make([]int, 10000)
 	batchScheduler.RegisterProcessor(&TestCaseProcessor[int, int]{})
 	controlCtx, _ := context.WithTimeout(context.Background(), time.Second*3)

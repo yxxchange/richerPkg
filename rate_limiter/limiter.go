@@ -1,4 +1,4 @@
-package batch_scheduler
+package rate_limiter
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-var DefaultOptions = SchedulerOptions{
+var DefaultOptions = LimiterOptions{
 	MaxConcurrency:   100,
 	BatchSize:        200,
 	RequestPerSecond: 1000,
@@ -17,7 +17,7 @@ var DefaultOptions = SchedulerOptions{
 
 type ProcessResultFn[T, V any] func(output Output[T, V])
 
-type SchedulerOptions struct {
+type LimiterOptions struct {
 	MaxConcurrency   int
 	BatchSize        int
 	RequestPerSecond int
@@ -32,7 +32,7 @@ type Output[T, V any] struct {
 	Err    error
 }
 
-type BatchScheduler[T, V any] struct {
+type RateLimiter[T, V any] struct {
 	Processor Processor[T, V]
 	Logger    Logger
 
@@ -49,8 +49,8 @@ type BatchScheduler[T, V any] struct {
 	ctx context.Context
 }
 
-func NewBatchScheduler[T, V any](options SchedulerOptions) *BatchScheduler[T, V] {
-	return &BatchScheduler[T, V]{
+func NewRateLimiter[T, V any](options LimiterOptions) *RateLimiter[T, V] {
+	return &RateLimiter[T, V]{
 		maxConcurrency: options.MaxConcurrency,
 		batchSize:      options.BatchSize,
 		rqs:            options.RequestPerSecond,
@@ -61,15 +61,15 @@ func NewBatchScheduler[T, V any](options SchedulerOptions) *BatchScheduler[T, V]
 	}
 }
 
-func (bs *BatchScheduler[T, V]) RegisterProcessor(processor Processor[T, V]) {
+func (bs *RateLimiter[T, V]) RegisterProcessor(processor Processor[T, V]) {
 	bs.Processor = processor
 }
 
-func (bs *BatchScheduler[T, V]) RegisterLogger(logger Logger) {
+func (bs *RateLimiter[T, V]) RegisterLogger(logger Logger) {
 	bs.Logger = logger
 }
 
-func (bs *BatchScheduler[T, V]) Start(ctx context.Context) {
+func (bs *RateLimiter[T, V]) Start(ctx context.Context) {
 	if ctx == nil {
 		panic("ctx can't be nil")
 	}
@@ -80,11 +80,11 @@ func (bs *BatchScheduler[T, V]) Start(ctx context.Context) {
 	}
 }
 
-func (bs *BatchScheduler[T, V]) ResultFlow() chan Output[T, V] {
+func (bs *RateLimiter[T, V]) ResultFlow() chan Output[T, V] {
 	return bs.ResultQueue.Chan()
 }
 
-func (bs *BatchScheduler[T, V]) submit(task T) {
+func (bs *RateLimiter[T, V]) submit(task T) {
 	select {
 	case <-bs.ctx.Done():
 		bs.Logger.Infof("can't submit task, because ctx done, task info: %v", task)
@@ -93,14 +93,24 @@ func (bs *BatchScheduler[T, V]) submit(task T) {
 	}
 }
 
-func (bs *BatchScheduler[T, V]) batchSubmit(tasks []T) {
+func (bs *RateLimiter[T, V]) singleSubmit(task T) error {
+	err := bs.RateLimiter.Wait(bs.ctx)
+	if err != nil {
+		bs.Logger.Errorf("batch submit err: %v", err)
+		return err
+	}
+	bs.submit(task)
+	return nil
+}
+
+func (bs *RateLimiter[T, V]) batchSubmit(tasks []T) {
 	for i := 0; i <= len(tasks); i += bs.batchSize {
 		end := min(i+bs.batchSize, len(tasks))
 		subTasks := tasks[i:end]
-		err := bs.RateLimiter.WaitN(context.TODO(), bs.batchSize)
+		err := bs.RateLimiter.WaitN(bs.ctx, bs.batchSize)
 		if err != nil {
-			i -= bs.batchSize
-			continue
+			bs.Logger.Errorf("batch submit err: %v", err)
+			return
 		}
 		for _, t := range subTasks {
 			bs.submit(t)
@@ -108,7 +118,7 @@ func (bs *BatchScheduler[T, V]) batchSubmit(tasks []T) {
 	}
 }
 
-func (bs *BatchScheduler[T, V]) work(ctx context.Context) {
+func (bs *RateLimiter[T, V]) work(ctx context.Context) {
 	defer bs.wg.Done()
 	for {
 		select {
@@ -133,26 +143,26 @@ func (bs *BatchScheduler[T, V]) work(ctx context.Context) {
 	}
 }
 
-func (bs *BatchScheduler[T, V]) waitClose() {
+func (bs *RateLimiter[T, V]) waitClose() {
 	bs.TaskCtxQueue.Close()
 	bs.wg.Wait()
 	bs.ResultQueue.Close()
 }
 
-func (bs *BatchScheduler[T, V]) mustStart() {
+func (bs *RateLimiter[T, V]) mustStart() {
 	if bs.ctx == nil {
 		panic("must execute Start() method")
 	}
 }
 
-func (bs *BatchScheduler[T, V]) ProcessResultSerially(fn ProcessResultFn[T, V]) {
+func (bs *RateLimiter[T, V]) ProcessResultSerially(fn ProcessResultFn[T, V]) {
 	bs.mustStart()
 	for res := range bs.ResultFlow() {
 		fn(res)
 	}
 }
 
-func (bs *BatchScheduler[T, V]) ProcessResultConcurrently(fn ProcessResultFn[T, V]) {
+func (bs *RateLimiter[T, V]) ProcessResultConcurrently(fn ProcessResultFn[T, V]) {
 	bs.mustStart()
 	for res := range bs.ResultFlow() {
 		go func(input Output[T, V]) {
@@ -161,10 +171,19 @@ func (bs *BatchScheduler[T, V]) ProcessResultConcurrently(fn ProcessResultFn[T, 
 	}
 }
 
-func (bs *BatchScheduler[T, V]) ProcessTasks(taskCtxList []T) {
+func (bs *RateLimiter[T, V]) ProcessTasks(taskCtxList []T) {
 	bs.mustStart()
 	go func() {
 		bs.batchSubmit(taskCtxList)
 		bs.waitClose()
 	}()
+}
+
+func (bs *RateLimiter[T, V]) ProcessTask(task T) error {
+	bs.mustStart()
+	return bs.singleSubmit(task)
+}
+
+func (bs *RateLimiter[T, V]) WaitAndClose() {
+	bs.waitClose()
 }
