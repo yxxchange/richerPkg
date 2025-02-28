@@ -18,17 +18,37 @@ func (tp *TestCaseProcessor[T, V]) Process(_ T) (V, error) {
 	return res, nil
 }
 
-func TestBatchScheduler_Scheduler(t *testing.T) {
-	batchScheduler := NewRateLimiter[int, int](DefaultOptions)
+func TestRateLimiter_BatchSubmit(t *testing.T) {
+	rateLimiter := NewRateLimiter[int, int](DefaultOptions)
 	taskCtx := make([]int, 10000)
-	batchScheduler.RegisterProcessor(&TestCaseProcessor[int, int]{})
+	rateLimiter.RegisterProcessor(&TestCaseProcessor[int, int]{})
 	controlCtx, _ := context.WithTimeout(context.Background(), time.Second*3)
-	batchScheduler.Start(controlCtx)
-	batchScheduler.ProcessTasks(taskCtx)
+	rateLimiter.Start(controlCtx)
+	rateLimiter.ProcessTasks(taskCtx)
 	var resList []Output[int, int]
 	var customFn ProcessResultFn[int, int] = func(o Output[int, int]) {
 		resList = append(resList, o)
 	}
-	batchScheduler.ProcessResultSerially(customFn)
+	rateLimiter.ProcessResultSerially(customFn)
+	fmt.Printf("len: %d", len(resList))
+}
+
+func TestRateLimiter_SingleSubmit(t *testing.T) {
+	rateLimiter := NewRateLimiter[int, int](DefaultOptions)
+	taskCtx := make([]int, 10000)
+	rateLimiter.RegisterProcessor(&TestCaseProcessor[int, int]{})
+	controlCtx, _ := context.WithTimeout(context.Background(), time.Second*30)
+	rateLimiter.Start(controlCtx)
+	var resList []Output[int, int]
+	var customFn ProcessResultFn[int, int] = func(o Output[int, int]) {
+		resList = append(resList, o)
+	}
+	go func() {
+		for _, ta := range taskCtx {
+			_ = rateLimiter.ProcessTask(ta)
+		}
+		rateLimiter.WaitAndClose()
+	}()
+	rateLimiter.ProcessResultSerially(customFn)
 	fmt.Printf("len: %d", len(resList))
 }
