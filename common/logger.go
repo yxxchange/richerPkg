@@ -1,10 +1,6 @@
-package rate_limiter
+package common
 
 import "fmt"
-
-type Processor[T, V any] interface {
-	Process(param T) (V, error)
-}
 
 type Logger interface {
 	Infof(format string, i ...interface{})

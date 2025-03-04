@@ -1,6 +1,7 @@
 package rate_limiter
 
 import (
+	"batch_scheduler/common"
 	"context"
 	"golang.org/x/time/rate"
 	"sync"
@@ -33,8 +34,8 @@ type Output[T, V any] struct {
 }
 
 type RateLimiter[T, V any] struct {
-	Processor Processor[T, V]
-	Logger    Logger
+	Processor common.Processor[T, V]
+	Logger    common.Logger
 
 	TaskCtxQueue *SafeChan[T]
 	ResultQueue  *SafeChan[Output[T, V]]
@@ -56,16 +57,16 @@ func NewRateLimiter[T, V any](options LimiterOptions) *RateLimiter[T, V] {
 		rqs:            options.RequestPerSecond,
 		TaskCtxQueue:   NewSafeChan[T](options.TaskChanSize),
 		ResultQueue:    NewSafeChan[Output[T, V]](options.ResultChanSize),
-		Logger:         &DefaultLogger{},
+		Logger:         &common.DefaultLogger{},
 		RateLimiter:    rate.NewLimiter(rate.Limit(options.RequestPerSecond), options.BatchSize),
 	}
 }
 
-func (bs *RateLimiter[T, V]) RegisterProcessor(processor Processor[T, V]) {
+func (bs *RateLimiter[T, V]) RegisterProcessor(processor common.Processor[T, V]) {
 	bs.Processor = processor
 }
 
-func (bs *RateLimiter[T, V]) RegisterLogger(logger Logger) {
+func (bs *RateLimiter[T, V]) RegisterLogger(logger common.Logger) {
 	bs.Logger = logger
 }
 
